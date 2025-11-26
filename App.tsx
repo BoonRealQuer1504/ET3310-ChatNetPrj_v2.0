@@ -18,6 +18,10 @@ import {
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import TcpSocket from 'react-native-tcp-socket';
+import { pick } from '@react-native-documents/picker';
+import { launchImageLibrary } from 'react-native-image-picker';
+import RNFS from 'react-native-fs';
+import FileViewer from 'react-native-file-viewer';
 import { encryptCaesar, decryptCaesar, isValidKey, parseKey } from './src/utils/caesarCipher';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -38,6 +42,7 @@ interface Message {
   sender: 'me' | 'other';
   timestamp: Date;
   encrypted?: boolean;
+  type?: 'text' | 'image' | 'pdf';
 }
 
 const PORT = 8888;
@@ -52,13 +57,13 @@ function App(): React.JSX.Element {
   const [encryptionKey, setEncryptionKey] = useState<string>('3');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isEncryptionEnabled, setIsEncryptionEnabled] = useState(true);
-  
+  const [attachmentType, setAttachmentType] = useState<'text' | 'image' | 'pdf' | null>(null);
   const serverRef = useRef<any>(null);
   const clientRef = useRef<any>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   const encryptionKeyRef = useRef(encryptionKey);
   const isEncryptionEnabledRef = useRef(isEncryptionEnabled);
-  
+
   useEffect(() => {
     encryptionKeyRef.current = encryptionKey;
   }, [encryptionKey]);
@@ -103,21 +108,21 @@ function App(): React.JSX.Element {
       const server = TcpSocket.createServer((socket: any) => {
         socket.on('data', (data: any) => {
           const receivedMessage = data.toString('utf8');
-          const isEncryptionOn = isEncryptionEnabledRef.current;
-          const currentKey = encryptionKeyRef.current;
-          let displayMessage = receivedMessage;
-          
-          if (isEncryptionOn && isValidKey(currentKey)) {
-            displayMessage = decryptCaesar(receivedMessage, parseKey(currentKey));
-          }
-          
+          const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
+          const decrypted = shouldDecrypt
+              ? decryptCaesar(receivedMessage, parseKey(encryptionKeyRef.current))
+              : receivedMessage;
+
+          const type = getFileType(decrypted);
+
           setMessages(prev => [
             ...prev,
             {
-              text: displayMessage,
+              text: decrypted,
               sender: 'other',
               timestamp: new Date(),
-              encrypted: isEncryptionOn,
+              encrypted: shouldDecrypt,
+              type,
             },
           ]);
         });
@@ -143,8 +148,87 @@ function App(): React.JSX.Element {
     }
   };
 
+
+  const isBase64Image = (str: string) => /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(str);
+  const isBase64Pdf = (str: string) => /^data:application\/pdf;base64,/.test(str);
+
+ const getFileType = (str: string): 'text' | 'image' | 'pdf' => {
+   if (isBase64Image(str)) return 'image';
+   if (isBase64Pdf(str)) return 'pdf';
+   return 'text';
+ };
+
+
+  const pickImage = () => {
+    launchImageLibrary(
+      {
+        mediaType: 'photo',
+        includeBase64: false, // để tránh lỗi bộ nhớ
+        quality: 0.8,
+      },
+      async (response) => {
+        if (response.didCancel || response.errorCode) return;
+
+        const uri = response.assets?.[0]?.uri;
+        if (!uri) return;
+
+        try {
+          const base64 = await RNFS.readFile(uri, 'base64');
+          const dataUrl = `data:image/jpeg;base64,${base64}`;
+          setMessage(dataUrl);
+          setAttachmentType('image');
+          setTimeout(() => sendMessage(), 400);
+        } catch (e) {
+          Alert.alert('Lỗi', 'Không thể đọc ảnh');
+        }
+      }
+    );
+  };
+
+  const pickPdf = async () => {
+      try {
+        const [file] = await pick({
+          type: ['com.adobe.pdf'],
+          allowMultiSelection: false,
+        });
+
+        if (!file?.uri) return;
+
+        const base64 = await RNFS.readFile(file.uri, 'base64');
+        const dataUrl = `data:application/pdf;base64,${base64}`;
+        setMessage(dataUrl);
+        setAttachmentType('pdf');
+        setTimeout(() => sendMessage(), 300);
+      } catch (err: any) {
+        if (err.code === 'OPERATION_CANCELED' || err.isCanceled) {
+          // Người dùng hủy
+        } else {
+          Alert.alert('Lỗi', 'Không thể chọn file PDF');
+        }
+      }
+    };
+
+  const openPdf = async (base64Data: string) => {
+      try {
+        const base64 = base64Data.replace(/^data:application\/pdf;base64,/, '');
+        const path = `${RNFS.CachesDirectoryPath}/chatnet_${Date.now()}.pdf`;
+        await RNFS.writeFile(path, base64, 'base64');
+        await FileViewer.open(path);
+      } catch (error) {
+        Alert.alert('Lỗi', 'Không thể mở file PDF');
+      }
+    };
+
+    const showAttachmentOptions = () => {
+      Alert.alert('Gửi tệp', 'Chọn loại bạn muốn gửi', [
+        { text: 'Ảnh từ thư viện', onPress: pickImage },
+        { text: 'File PDF', onPress: pickPdf },
+        { text: 'Hủy', style: 'cancel' },
+      ]);
+    };
+
   const sendMessage = () => {
-    if (!message.trim()) {
+    if (!message.trim() && !attachmentType) {
       Alert.alert('Thông báo', 'Vui lòng nhập tin nhắn');
       return;
     }
@@ -159,12 +243,15 @@ function App(): React.JSX.Element {
       return;
     }
 
-    const messageToSend = message.trim();
-    const encryptedMessage = isEncryptionEnabled 
-      ? encryptCaesar(messageToSend, parseKey(encryptionKey))
-      : messageToSend;
-    
+    const finalType = getFileType(message) || 'text';
+    const originalMessage = message.trim();
+    const encryptedMessage = isEncryptionEnabled
+          ? encryptCaesar(originalMessage, parseKey(encryptionKey))
+          : originalMessage;
+
     setMessage('');
+    setAttachmentType(null);
+    scrollViewRef.current?.scrollToEnd({ animated: true });
 
     try {
       let connectionTimeout: any;
@@ -186,10 +273,11 @@ function App(): React.JSX.Element {
               setMessages(prev => [
                 ...prev,
                 {
-                  text: messageToSend,
+                  text: originalMessage,
                   sender: 'me',
                   timestamp: new Date(),
                   encrypted: isEncryptionEnabled,
+                  type: finalType,
                 },
               ]);
             }
@@ -205,7 +293,7 @@ function App(): React.JSX.Element {
         if (!isConnected) {
           client.destroy();
           Alert.alert(
-            'Lỗi kết nối', 
+            'Lỗi kết nối',
             `Không thể kết nối đến ${targetIp}\n\nKiểm tra:\n• IP có đúng không?\n• Thiết bị có cùng WiFi không?\n• Ứng dụng đã mở ở thiết bị kia chưa?`
           );
         }
@@ -213,10 +301,10 @@ function App(): React.JSX.Element {
 
       client.on('error', (error: any) => {
         clearTimeout(connectionTimeout);
-        
+
         let errorMessage = 'Không thể kết nối đến ' + targetIp;
         const errMsg = error?.message || '';
-        
+
         if (errMsg.includes('ECONNREFUSED')) {
           errorMessage += '\n\n❌ Kết nối bị từ chối!\nỨng dụng chưa được mở ở thiết bị đích.';
         } else if (errMsg.includes('ETIMEDOUT') || errMsg.includes('timeout')) {
@@ -226,7 +314,7 @@ function App(): React.JSX.Element {
         } else if (errMsg) {
           errorMessage += '\n\n' + errMsg;
         }
-        
+
         Alert.alert('Lỗi kết nối', errorMessage);
       });
 
@@ -252,13 +340,13 @@ function App(): React.JSX.Element {
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>💬 ChatNET</Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.settingsButton}
               onPress={() => setShowSettingsModal(true)}
               activeOpacity={0.7}
             >
-              <Image 
-                source={require('./assets/setting.png')} 
+              <Image
+                source={require('./assets/setting.png')}
                 style={styles.settingsIcon}
                 resizeMode="contain"
               />
@@ -282,7 +370,7 @@ function App(): React.JSX.Element {
                 <View style={styles.modalContent}>
                   <View style={styles.modalHeader}>
                     <Text style={styles.modalTitle}>⚙️ Cài đặt</Text>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       onPress={() => setShowSettingsModal(false)}
                       style={styles.closeButton}
                     >
@@ -296,8 +384,8 @@ function App(): React.JSX.Element {
                       <Text style={styles.modalLabel}>📱 Địa chỉ IP của bạn</Text>
                       <View style={styles.ipDisplayRow}>
                         <Text style={styles.ipDisplayText}>{myIp}</Text>
-                        <TouchableOpacity 
-                          style={styles.reloadButton} 
+                        <TouchableOpacity
+                          style={styles.reloadButton}
                           onPress={fetchIpAddress}
                           activeOpacity={0.7}
                         >
@@ -367,7 +455,7 @@ function App(): React.JSX.Element {
                     )}
                   </ScrollView>
 
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.saveButton}
                     onPress={() => setShowSettingsModal(false)}
                     activeOpacity={0.7}
@@ -405,12 +493,30 @@ function App(): React.JSX.Element {
                           msg.sender === 'me' ? styles.myMessage : styles.otherMessage,
                         ]}
                       >
-                        <Text style={[
-                          styles.messageText,
-                          msg.sender === 'me' ? styles.myMessageText : styles.otherMessageText,
-                        ]}>
-                          {msg.text}
-                        </Text>
+                        {msg.type === 'image' ? (
+                                <Image
+                                  source={{ uri: msg.text }}
+                                  style={styles.messageImage}
+                                  resizeMode="contain"
+                                />
+                              ) : msg.type === 'pdf' ? (
+                                <TouchableOpacity
+                                  style={styles.pdfContainer}
+                                  onPress={() => openPdf(msg.text)}
+                                >
+                                  <Text style={styles.pdfIcon}>PDF</Text>
+                                  <Text style={styles.pdfText}>File PDF • Nhấn để mở</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <Text
+                                  style={[
+                                    styles.messageText,
+                                    msg.sender === 'me' ? styles.myMessageText : styles.otherMessageText,
+                                  ]}
+                                >
+                                  {msg.text}
+                                </Text>
+                              )}
                         <Text style={[
                           styles.timestamp,
                           msg.sender === 'me' ? styles.myTimestamp : styles.otherTimestamp,
@@ -429,6 +535,18 @@ function App(): React.JSX.Element {
 
             {/* Message Input */}
             <View style={styles.inputContainer}>
+              <TouchableOpacity
+                              style={styles.attachButton}
+                              onPress={showAttachmentOptions}
+                              activeOpacity={0.7}
+
+                            >
+                              <Image
+                                source={require('./assets/attach.png')}
+                                style={styles.attachIcon}
+                                resizeMode="contain"
+                              />
+              </TouchableOpacity>
               <TextInput
                 style={styles.messageInput}
                 value={message}
@@ -438,19 +556,21 @@ function App(): React.JSX.Element {
                 multiline
                 maxLength={500}
               />
-              <TouchableOpacity 
-                style={[styles.sendButton, !message.trim() && styles.sendButtonDisabled]} 
+              <TouchableOpacity
+                style={[styles.sendButton, !message.trim() && styles.sendButtonDisabled]}
                 onPress={sendMessage}
                 activeOpacity={0.7}
                 disabled={!message.trim()}
               >
-                <Image 
-                  source={require('./assets/send-message.png')} 
+                <Image
+                  source={require('./assets/send-message.png')}
                   style={styles.sendIcon}
                   resizeMode="contain"
                 />
               </TouchableOpacity>
             </View>
+
+
           </KeyboardAvoidingView>
         </SafeAreaView>
       </ImageBackground>
@@ -783,6 +903,12 @@ const styles = StyleSheet.create({
     width: moderateScale(25),
     height: moderateScale(25),
   },
+  attachButton: { padding: 10 },
+  attachIcon: { width: 26, height: 26, tintColor: '#0084ff' },
+  messageImage: { width: SCREEN_WIDTH * 0.7, height: SCREEN_WIDTH * 0.7 * 1.3, borderRadius: 16, marginVertical: 6 },
+  pdfContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffebee', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: '#ffcdd2' },
+  pdfIcon: { fontSize: 32, marginRight: 12 },
+  pdfText: { color: '#c62828', fontWeight: '600' },
 });
 
 export default App;
