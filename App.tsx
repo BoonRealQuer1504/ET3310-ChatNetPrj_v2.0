@@ -108,20 +108,25 @@ function App(): React.JSX.Element {
       const server = TcpSocket.createServer((socket: any) => {
         socket.on('data', (data: any) => {
           const receivedMessage = data.toString('utf8');
-          const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
-          const decrypted = shouldDecrypt
-              ? decryptCaesar(receivedMessage, parseKey(encryptionKeyRef.current))
-              : receivedMessage;
+          const type = getFileType(receivedMessage);
 
-          const type = getFileType(decrypted);
+          let finalMessage = receivedMessage;
+          let isEncryptedMsg = false;
+          if (type === 'text') {
+              const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
+              if (shouldDecrypt) {
+                          finalMessage = decryptCaesar(receivedMessage, parseKey(encryptionKeyRef.current));
+                          isEncryptedMsg = true;
+                       }
+                    }
 
           setMessages(prev => [
             ...prev,
             {
-              text: decrypted,
+              text: finalMessage,
               sender: 'other',
               timestamp: new Date(),
-              encrypted: shouldDecrypt,
+              encrypted: isEncryptedMsg,
               type,
             },
           ]);
@@ -175,9 +180,7 @@ function App(): React.JSX.Element {
         try {
           const base64 = await RNFS.readFile(uri, 'base64');
           const dataUrl = `data:image/jpeg;base64,${base64}`;
-          setMessage(dataUrl);
-          setAttachmentType('image');
-          setTimeout(() => sendMessage(), 400);
+          sendMessage(dataUrl, 'image');
         } catch (e) {
           Alert.alert('Lỗi', 'Không thể đọc ảnh');
         }
@@ -196,9 +199,7 @@ function App(): React.JSX.Element {
 
         const base64 = await RNFS.readFile(file.uri, 'base64');
         const dataUrl = `data:application/pdf;base64,${base64}`;
-        setMessage(dataUrl);
-        setAttachmentType('pdf');
-        setTimeout(() => sendMessage(), 300);
+        sendMessage(dataUrl, 'pdf');
       } catch (err: any) {
         if (err.code === 'OPERATION_CANCELED' || err.isCanceled) {
           // Người dùng hủy
@@ -227,8 +228,10 @@ function App(): React.JSX.Element {
       ]);
     };
 
-  const sendMessage = () => {
-    if (!message.trim() && !attachmentType) {
+  const sendMessage = (content?: string | any , explicitType?: 'image' | 'pdf') => {
+    const msgToSend = (typeof content === 'string' ? content : message) || '';
+    const currentType = explicitType || attachmentType;
+    if (!message.trim() && !currentType) {
       Alert.alert('Thông báo', 'Vui lòng nhập tin nhắn');
       return;
     }
@@ -237,17 +240,15 @@ function App(): React.JSX.Element {
       Alert.alert('Thông báo', 'Vui lòng nhập IP đối phương trong Settings');
       return;
     }
-
-    if (isEncryptionEnabled && !isValidKey(encryptionKey)) {
+    const isFile = !!explicitType || isBase64Image(msgToSend) || isBase64Pdf(msgToSend);
+    if (!isFile && isEncryptionEnabled && !isValidKey(encryptionKey)) {
       Alert.alert('Lỗi mã hóa', 'Key phải là số từ 1-25');
       return;
     }
 
-    const finalType = getFileType(message) || 'text';
-    const originalMessage = message.trim();
-    const encryptedMessage = isEncryptionEnabled
-          ? encryptCaesar(originalMessage, parseKey(encryptionKey))
-          : originalMessage;
+    const finalMessage = (!isFile && isEncryptionEnabled)
+              ? encryptCaesar(msgToSend.trim(), parseKey(encryptionKey))
+              : msgToSend.trim();
 
     setMessage('');
     setAttachmentType(null);
@@ -266,18 +267,18 @@ function App(): React.JSX.Element {
           isConnected = true;
           clearTimeout(connectionTimeout);
 
-          client.write(encryptedMessage, 'utf8', (error) => {
+          client.write(finalMessage, 'utf8', (error) => {
             if (error) {
               Alert.alert('Lỗi', 'Không thể gửi tin nhắn: ' + error.message);
             } else {
               setMessages(prev => [
                 ...prev,
                 {
-                  text: originalMessage,
+                  text: msgToSend,
                   sender: 'me',
                   timestamp: new Date(),
-                  encrypted: isEncryptionEnabled,
-                  type: finalType,
+                  encrypted: !isFile && isEncryptionEnabled,
+                  type: explicitType || getFileType(msgToSend) || 'text',
                 },
               ]);
             }
