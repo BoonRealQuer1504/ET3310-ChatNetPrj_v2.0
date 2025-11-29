@@ -101,41 +101,72 @@ function App(): React.JSX.Element {
         clientRef.current.destroy();
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startServer = () => {
     try {
       const server = TcpSocket.createServer((socket: any) => {
-        socket.on('data', (data: any) => {
-          const receivedMessage = data.toString('utf8');
-          const type = getFileType(receivedMessage);
+        // EACH socket connection has its own buffer
+        let receiveBuffer = '';
 
-          let finalMessage = receivedMessage;
-          let isEncryptedMsg = false;
-          if (type === 'text') {
-              const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
-              if (shouldDecrypt) {
-                          finalMessage = decryptCaesar(receivedMessage, parseKey(encryptionKeyRef.current));
-                          isEncryptedMsg = true;
-                       }
-                    }
+        socket.on('data', (chunk: any) => {
+          // append raw chunk (do NOT trim)
+          const txt = chunk.toString('utf8');
+          receiveBuffer += txt;
 
-          setMessages(prev => [
-            ...prev,
-            {
-              text: finalMessage,
-              sender: 'other',
-              timestamp: new Date(),
-              encrypted: isEncryptedMsg,
-              type,
-            },
-          ]);
+          // process while we have at least one full message (terminated by '\n')
+          let newlineIndex = receiveBuffer.indexOf('\n');
+          while (newlineIndex !== -1) {
+            const raw = receiveBuffer.slice(0, newlineIndex); // message JSON string
+            receiveBuffer = receiveBuffer.slice(newlineIndex + 1); // rest
+
+            if (raw && raw.length > 0) {
+              try {
+                const obj = JSON.parse(raw);
+                // obj should be { type: 'text'|'image'|'pdf', content: '...' }
+                const type: 'text' | 'image' | 'pdf' = obj.type || 'text';
+                let content: string = obj.content ?? '';
+
+                let finalMessage = content;
+                let isEncryptedMsg = false;
+
+                if (type === 'text') {
+                  const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
+                  if (shouldDecrypt) {
+                    finalMessage = decryptCaesar(content, parseKey(encryptionKeyRef.current));
+                    isEncryptedMsg = true;
+                  }
+                }
+
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    text: finalMessage,
+                    sender: 'other',
+                    timestamp: new Date(),
+                    encrypted: isEncryptedMsg,
+                    type,
+                  },
+                ]);
+              } catch (e) {
+                // JSON parse failed — maybe incomplete JSON (shouldn't happen because we split on newline),
+                // or corrupted. We'll ignore this chunk to avoid crash.
+                // Optionally you can log or push to an error queue.
+              }
+            }
+
+            // check next newline
+            newlineIndex = receiveBuffer.indexOf('\n');
+          }
         });
 
         socket.on('error', (error: any) => {
+          // ignore or log
         });
 
         socket.on('close', () => {
+          // closed
         });
       });
 
@@ -153,22 +184,21 @@ function App(): React.JSX.Element {
     }
   };
 
+  // simple base64/data-url checks (do NOT trim)
+  const isBase64Image = (str: string) => typeof str === 'string' && str.startsWith('data:image/');
+  const isBase64Pdf = (str: string) => typeof str === 'string' && str.startsWith('data:application/pdf');
 
-  const isBase64Image = (str: string) => /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(str);
-  const isBase64Pdf = (str: string) => /^data:application\/pdf;base64,/.test(str);
-
- const getFileType = (str: string): 'text' | 'image' | 'pdf' => {
-   if (isBase64Image(str)) return 'image';
-   if (isBase64Pdf(str)) return 'pdf';
-   return 'text';
- };
-
+  const getFileType = (str: string): 'text' | 'image' | 'pdf' => {
+    if (isBase64Image(str)) return 'image';
+    if (isBase64Pdf(str)) return 'pdf';
+    return 'text';
+  };
 
   const pickImage = () => {
     launchImageLibrary(
       {
         mediaType: 'photo',
-        includeBase64: false, // để tránh lỗi bộ nhớ
+        includeBase64: false, // read using RNFS to avoid memory bloat
         quality: 0.8,
       },
       async (response) => {
@@ -189,49 +219,52 @@ function App(): React.JSX.Element {
   };
 
   const pickPdf = async () => {
-      try {
-        const [file] = await pick({
-          type: ['com.adobe.pdf'],
-          allowMultiSelection: false,
-        });
+    try {
+      const [file] = await pick({
+        type: ['com.adobe.pdf'],
+        allowMultiSelection: false,
+      });
 
-        if (!file?.uri) return;
+      if (!file?.uri) return;
 
-        const base64 = await RNFS.readFile(file.uri, 'base64');
-        const dataUrl = `data:application/pdf;base64,${base64}`;
-        sendMessage(dataUrl, 'pdf');
-      } catch (err: any) {
-        if (err.code === 'OPERATION_CANCELED' || err.isCanceled) {
-          // Người dùng hủy
-        } else {
-          Alert.alert('Lỗi', 'Không thể chọn file PDF');
-        }
+      const base64 = await RNFS.readFile(file.uri, 'base64');
+      const dataUrl = `data:application/pdf;base64,${base64}`;
+      sendMessage(dataUrl, 'pdf');
+    } catch (err: any) {
+      if (err.code === 'OPERATION_CANCELED' || err.isCanceled) {
+        // user cancelled
+      } else {
+        Alert.alert('Lỗi', 'Không thể chọn file PDF');
       }
-    };
+    }
+  };
 
   const openPdf = async (base64Data: string) => {
-      try {
-        const base64 = base64Data.replace(/^data:application\/pdf;base64,/, '');
-        const path = `${RNFS.CachesDirectoryPath}/chatnet_${Date.now()}.pdf`;
-        await RNFS.writeFile(path, base64, 'base64');
-        await FileViewer.open(path);
-      } catch (error) {
-        Alert.alert('Lỗi', 'Không thể mở file PDF');
-      }
-    };
+    try {
+      const base64 = base64Data.replace(/^data:application\/pdf;base64,/, '');
+      const path = `${RNFS.CachesDirectoryPath}/chatnet_${Date.now()}.pdf`;
+      await RNFS.writeFile(path, base64, 'base64');
+      await FileViewer.open(path);
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể mở file PDF');
+    }
+  };
 
-    const showAttachmentOptions = () => {
-      Alert.alert('Gửi tệp', 'Chọn loại bạn muốn gửi', [
-        { text: 'Ảnh từ thư viện', onPress: pickImage },
-        { text: 'File PDF', onPress: pickPdf },
-        { text: 'Hủy', style: 'cancel' },
-      ]);
-    };
+  const showAttachmentOptions = () => {
+    Alert.alert('Gửi tệp', 'Chọn loại bạn muốn gửi', [
+      { text: 'Ảnh từ thư viện', onPress: pickImage },
+      { text: 'File PDF', onPress: pickPdf },
+      { text: 'Hủy', style: 'cancel' },
+    ]);
+  };
 
-  const sendMessage = (content?: string | any , explicitType?: 'image' | 'pdf') => {
+  const sendMessage = (content?: string | any, explicitType?: 'image' | 'pdf') => {
     const msgToSend = (typeof content === 'string' ? content : message) || '';
-    const currentType = explicitType || attachmentType;
-    if (!message.trim() && !currentType) {
+    const currentType = explicitType || attachmentType || (isBase64Image(msgToSend) ? 'image' : isBase64Pdf(msgToSend) ? 'pdf' : 'text');
+    const isFile = currentType === 'image' || currentType === 'pdf';
+
+    // validation
+    if (!msgToSend && !isFile) {
       Alert.alert('Thông báo', 'Vui lòng nhập tin nhắn');
       return;
     }
@@ -240,15 +273,27 @@ function App(): React.JSX.Element {
       Alert.alert('Thông báo', 'Vui lòng nhập IP đối phương trong Settings');
       return;
     }
-    const isFile = !!explicitType || isBase64Image(msgToSend) || isBase64Pdf(msgToSend);
+
     if (!isFile && isEncryptionEnabled && !isValidKey(encryptionKey)) {
       Alert.alert('Lỗi mã hóa', 'Key phải là số từ 1-25');
       return;
     }
 
-    const finalMessage = (!isFile && isEncryptionEnabled)
-              ? encryptCaesar(msgToSend.trim(), parseKey(encryptionKey))
-              : msgToSend.trim();
+    // prepare content: for text, trim; for files keep as-is (base64)
+    const contentToSend = isFile ? msgToSend : msgToSend.trim();
+
+    // encrypt only for text (if enabled)
+    const payloadContent = (!isFile && isEncryptionEnabled)
+      ? encryptCaesar(contentToSend, parseKey(encryptionKey))
+      : contentToSend;
+
+    // construct JSON message
+    const msgObj = {
+      type: currentType,
+      content: payloadContent,
+    };
+
+    const jsonString = JSON.stringify(msgObj) + '\n'; // newline delimiter
 
     setMessage('');
     setAttachmentType(null);
@@ -267,18 +312,20 @@ function App(): React.JSX.Element {
           isConnected = true;
           clearTimeout(connectionTimeout);
 
-          client.write(finalMessage, 'utf8', (error) => {
+          // write single JSON message (one write; payload may be large but socket will fragment — receiver will reassemble)
+          client.write(jsonString, 'utf8', (error) => {
             if (error) {
               Alert.alert('Lỗi', 'Không thể gửi tin nhắn: ' + error.message);
             } else {
+              // show in local UI (display original - not encrypted for user)
               setMessages(prev => [
                 ...prev,
                 {
-                  text: msgToSend,
+                  text: contentToSend,
                   sender: 'me',
                   timestamp: new Date(),
                   encrypted: !isFile && isEncryptionEnabled,
-                  type: explicitType || getFileType(msgToSend) || 'text',
+                  type: currentType,
                 },
               ]);
             }
@@ -495,29 +542,29 @@ function App(): React.JSX.Element {
                         ]}
                       >
                         {msg.type === 'image' ? (
-                                <Image
-                                  source={{ uri: msg.text }}
-                                  style={styles.messageImage}
-                                  resizeMode="contain"
-                                />
-                              ) : msg.type === 'pdf' ? (
-                                <TouchableOpacity
-                                  style={styles.pdfContainer}
-                                  onPress={() => openPdf(msg.text)}
-                                >
-                                  <Text style={styles.pdfIcon}>PDF</Text>
-                                  <Text style={styles.pdfText}>File PDF • Nhấn để mở</Text>
-                                </TouchableOpacity>
-                              ) : (
-                                <Text
-                                  style={[
-                                    styles.messageText,
-                                    msg.sender === 'me' ? styles.myMessageText : styles.otherMessageText,
-                                  ]}
-                                >
-                                  {msg.text}
-                                </Text>
-                              )}
+                          <Image
+                            source={{ uri: msg.text }}
+                            style={styles.messageImage}
+                            resizeMode="contain"
+                          />
+                        ) : msg.type === 'pdf' ? (
+                          <TouchableOpacity
+                            style={styles.pdfContainer}
+                            onPress={() => openPdf(msg.text)}
+                          >
+                            <Text style={styles.pdfIcon}>PDF</Text>
+                            <Text style={styles.pdfText}>File PDF • Nhấn để mở</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <Text
+                            style={[
+                              styles.messageText,
+                              msg.sender === 'me' ? styles.myMessageText : styles.otherMessageText,
+                            ]}
+                          >
+                            {msg.text}
+                          </Text>
+                        )}
                         <Text style={[
                           styles.timestamp,
                           msg.sender === 'me' ? styles.myTimestamp : styles.otherTimestamp,
@@ -537,16 +584,15 @@ function App(): React.JSX.Element {
             {/* Message Input */}
             <View style={styles.inputContainer}>
               <TouchableOpacity
-                              style={styles.attachButton}
-                              onPress={showAttachmentOptions}
-                              activeOpacity={0.7}
-
-                            >
-                              <Image
-                                source={require('./assets/attach.png')}
-                                style={styles.attachIcon}
-                                resizeMode="contain"
-                              />
+                style={styles.attachButton}
+                onPress={showAttachmentOptions}
+                activeOpacity={0.7}
+              >
+                <Image
+                  source={require('./assets/attach.png')}
+                  style={styles.attachIcon}
+                  resizeMode="contain"
+                />
               </TouchableOpacity>
               <TextInput
                 style={styles.messageInput}
@@ -559,7 +605,7 @@ function App(): React.JSX.Element {
               />
               <TouchableOpacity
                 style={[styles.sendButton, !message.trim() && styles.sendButtonDisabled]}
-                onPress={sendMessage}
+                onPress={() => sendMessage(undefined, undefined)}
                 activeOpacity={0.7}
                 disabled={!message.trim()}
               >
@@ -570,7 +616,6 @@ function App(): React.JSX.Element {
                 />
               </TouchableOpacity>
             </View>
-
 
           </KeyboardAvoidingView>
         </SafeAreaView>
