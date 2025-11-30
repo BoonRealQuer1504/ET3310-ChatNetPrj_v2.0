@@ -23,7 +23,7 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import FileViewer from 'react-native-file-viewer';
 //import { encryptCaesar, decryptCaesar, isValidKey, parseKey } from './src/utils/caesarCipher';
-import { encryptAES, decryptAES, isValidKey } from "./src/utils/aesCipher";
+import { encryptAES, decryptAES, isValidKey  } from "./src/utils/aesCipher";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -117,10 +117,12 @@ function App(): React.JSX.Element {
           receiveBuffer += txt;
 
           // process while we have at least one full message (terminated by '\n')
-          let newlineIndex = receiveBuffer.indexOf('\n');
+          const DELIMITER = "<<END>>";
+          let newlineIndex = receiveBuffer.indexOf(DELIMITER);
+
           while (newlineIndex !== -1) {
             const raw = receiveBuffer.slice(0, newlineIndex); // message JSON string
-            receiveBuffer = receiveBuffer.slice(newlineIndex + 1); // rest
+            receiveBuffer = receiveBuffer.slice(newlineIndex + DELIMITER.length); // rest
 
             if (raw && raw.length > 0) {
               try {
@@ -158,7 +160,7 @@ function App(): React.JSX.Element {
             }
 
             // check next newline
-            newlineIndex = receiveBuffer.indexOf('\n');
+            newlineIndex = receiveBuffer.indexOf(DELIMITER);
           }
         });
 
@@ -308,7 +310,7 @@ const pickPdf = async () => {
     }
 
     if (!isFile && isEncryptionEnabled && !isValidKey(encryptionKey)) {
-      Alert.alert('Lỗi mã hóa', 'Key AES phải có ít nhất 4 ký tự.');
+      Alert.alert('Lỗi mã hóa', 'Key phải là chuỗi có độ dài lớn hơn 4.');
       return;
     }
 
@@ -326,7 +328,9 @@ const pickPdf = async () => {
       content: payloadContent,
     };
 
-    const jsonString = JSON.stringify(msgObj) + '\n'; // newline delimiter
+    const DELIMITER = "<<END>>";
+    const jsonString = JSON.stringify(msgObj) + DELIMITER;
+
 
     setMessage('');
     setAttachmentType(null);
@@ -516,7 +520,7 @@ const pickPdf = async () => {
                     {/* Encryption Key - Only show when encryption is enabled */}
                     {isEncryptionEnabled && (
                       <View style={styles.modalSection}>
-                        <Text style={styles.modalLabel}>🔑 Key mã hóa (chuỗi bất kỳ)</Text>
+                        <Text style={styles.modalLabel}>🔑 Key mã hóa (chuỗi bất kỳ độ dài lớn hơn 4.)</Text>
                         <TextInput
                           style={styles.modalInput}
                           value={encryptionKey}
