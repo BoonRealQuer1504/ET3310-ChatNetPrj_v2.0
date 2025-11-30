@@ -22,7 +22,8 @@ import { pick } from '@react-native-documents/picker';
 import { launchImageLibrary } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import FileViewer from 'react-native-file-viewer';
-import { encryptCaesar, decryptCaesar, isValidKey, parseKey } from './src/utils/caesarCipher';
+//import { encryptCaesar, decryptCaesar, isValidKey, parseKey } from './src/utils/caesarCipher';
+import { encryptAES, decryptAES, isValidKey } from "./src/utils/aesCipher";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -134,7 +135,7 @@ function App(): React.JSX.Element {
                 if (type === 'text') {
                   const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
                   if (shouldDecrypt) {
-                    finalMessage = decryptCaesar(content, parseKey(encryptionKeyRef.current));
+                    finalMessage = decryptAES(content, encryptionKeyRef.current);
                     isEncryptedMsg = true;
                   }
                 }
@@ -307,7 +308,7 @@ const pickPdf = async () => {
     }
 
     if (!isFile && isEncryptionEnabled && !isValidKey(encryptionKey)) {
-      Alert.alert('Lỗi mã hóa', 'Key phải là số từ 1-25');
+      Alert.alert('Lỗi mã hóa', 'Key AES phải có ít nhất 4 ký tự.');
       return;
     }
 
@@ -316,7 +317,7 @@ const pickPdf = async () => {
 
     // encrypt only for text (if enabled)
     const payloadContent = (!isFile && isEncryptionEnabled)
-      ? encryptCaesar(contentToSend, parseKey(encryptionKey))
+      ? encryptAES(contentToSend, encryptionKey)
       : contentToSend;
 
     // construct JSON message
@@ -515,15 +516,15 @@ const pickPdf = async () => {
                     {/* Encryption Key - Only show when encryption is enabled */}
                     {isEncryptionEnabled && (
                       <View style={styles.modalSection}>
-                        <Text style={styles.modalLabel}>🔑 Key mã hóa (1-25)</Text>
+                        <Text style={styles.modalLabel}>🔑 Key mã hóa (chuỗi bất kỳ)</Text>
                         <TextInput
                           style={styles.modalInput}
                           value={encryptionKey}
                           onChangeText={setEncryptionKey}
                           placeholder="3"
                           placeholderTextColor="#aaa"
-                          keyboardType="number-pad"
-                          maxLength={2}
+
+
                         />
                         <View style={styles.infoBox}>
                           <Text style={styles.infoIcon}>ℹ️</Text>
