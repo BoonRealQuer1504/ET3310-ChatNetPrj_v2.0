@@ -184,6 +184,7 @@ function App(): React.JSX.Element {
     }
   };
 
+
   // simple base64/data-url checks (do NOT trim)
   const isBase64Image = (str: string) => typeof str === 'string' && str.startsWith('data:image/');
   const isBase64Pdf = (str: string) => typeof str === 'string' && str.startsWith('data:application/pdf');
@@ -218,23 +219,54 @@ function App(): React.JSX.Element {
     );
   };
 
-  const pickPdf = async () => {
+const pickPdf = async () => {
     try {
-      const [file] = await pick({
-        type: ['com.adobe.pdf'],
-        allowMultiSelection: false,
-      });
+      // 1. CHỌN FILE
+      const [file] = await pick({ type: ['application/pdf'] });
 
-      if (!file?.uri) return;
+      if (!file || !file.uri) {
+        // Người dùng hủy chọn
+        return;
+      }
 
-      const base64 = await RNFS.readFile(file.uri, 'base64');
+      // 2. KIỂM TRA KÍCH THƯỚC (FIX: Dùng file.size thay vì RNFS.stat)
+      // File Picker Result object (file) thường có thuộc tính size
+      const fileSize = file.size;
+      if (fileSize && fileSize > 10 * 1024 * 1024) {
+        Alert.alert('Lỗi', 'File PDF quá lớn! Chọn file dưới 10MB');
+        return;
+      }
+
+      // 3. XÁC ĐỊNH ĐƯỜNG DẪN AN TOÀN
+      // Ưu tiên fileCopyUri (thường là path tạm thời tuyệt đối) hoặc dùng file.uri (content://)
+      const filePathToRead = file.fileCopyUri || file.uri;
+
+      // Loại bỏ tiền tố 'file://' nếu có (RNFS không thích điều này)
+      const finalPath = filePathToRead.startsWith('file://') ? filePathToRead.substring(7) : filePathToRead;
+
+      // 4. ĐỌC FILE (RNFS.readFile thường xử lý được content://)
+      const base64 = await RNFS.readFile(finalPath, 'base64');
+
+      if (!base64) {
+         Alert.alert('Lỗi', 'Không thể đọc nội dung file PDF.');
+         return;
+      }
+
       const dataUrl = `data:application/pdf;base64,${base64}`;
+
+      // 5. GỬI TIN NHẮN
       sendMessage(dataUrl, 'pdf');
+
     } catch (err: any) {
-      if (err.code === 'OPERATION_CANCELED' || err.isCanceled) {
-        // user cancelled
+      if (err.message && err.message.includes('User cancelled')) {
+         // Bỏ qua lỗi hủy
       } else {
-        Alert.alert('Lỗi', 'Không thể chọn file PDF');
+        // Thông báo lỗi thân thiện hơn
+        Alert.alert(
+          'Lỗi Đọc File',
+          'Xảy ra lỗi khi cố gắng đọc file PDF (Native Error). Vui lòng thử lại với file khác, hoặc đảm bảo ứng dụng có đủ quyền truy cập bộ nhớ.',
+        );
+        console.error('PDF PICKER/RNFS ERROR:', err);
       }
     }
   };
