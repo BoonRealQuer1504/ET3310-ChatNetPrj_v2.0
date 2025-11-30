@@ -40,7 +40,7 @@ Toàn bộ dữ liệu có thể được mã hóa AES-256-CBC, giúp đảm b�
 
 ### Mã hóa
 Ứng dụng sử dụng **AES Block Cipher - 256 - CBC** - một phương pháp mã hóa khối đảm bảo tính bảo mật cho việc truyền thông tin trên mạng LAN:
-- Hỗ trợ cả chữ thường, chữ hoa, chữ có dấu tiếng Việt, số và ký tự đặc biệt
+- Hỗ trợ văn bản bao gồm cả chữ thường, chữ hoa, chữ có dấu tiếng Việt, số và ký tự đặc biệt, các loại ảnh và file PDF.
 - Khóa do người dùng tự nhập (>= 4 ký tự, tự động chuẩn hóa thành 32 bytes).
 - IV được sử dụng:
 
