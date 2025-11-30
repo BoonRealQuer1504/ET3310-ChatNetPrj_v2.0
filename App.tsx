@@ -23,7 +23,7 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import FileViewer from 'react-native-file-viewer';
 //import { encryptCaesar, decryptCaesar, isValidKey, parseKey } from './src/utils/caesarCipher';
-import { encryptAES, decryptAES, isValidKey  } from "./src/utils/aesCipher";
+import { encryptAES, decryptAES, isValidKey, encryptBase64File, decryptBase64File  } from "./src/utils/aesCipher";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -140,7 +140,45 @@ function App(): React.JSX.Element {
                     finalMessage = decryptAES(content, encryptionKeyRef.current);
                     isEncryptedMsg = true;
                   }
+                } else if ((type === 'image' || type === 'pdf')) {
+                  const shouldDecrypt = isEncryptionEnabledRef.current && isValidKey(encryptionKeyRef.current);
+
+                  // CASE A: content is a plain data URL (not encrypted) -> keep as-is
+                  // CASE B: content is a JSON-string with { encrypted:true, mime, iv, data } -> decrypt
+                  let dataUrl = content;
+
+                  if (shouldDecrypt) {
+                    try {
+                      // obj.content might already be object if sender put object, or stringified JSON
+                      let parsed: any = content;
+                      if (typeof content === 'string') {
+                        parsed = JSON.parse(content);
+                      }
+
+                      if (parsed && parsed.encrypted && parsed.data && parsed.iv && parsed.mime) {
+                        // decrypt base64 payload
+                        const container = { iv: parsed.iv, data: parsed.data };
+                        const plainBase64 = decryptBase64File(container, encryptionKeyRef.current);
+                        if (plainBase64 && plainBase64.length > 0) {
+                          dataUrl = `data:${parsed.mime};base64,${plainBase64}`;
+                          isEncryptedMsg = true;
+                        } else {
+                          // decryption failed -> show friendly error placeholder
+                          dataUrl = ''; // or some error placeholder string
+                        }
+                      } else {
+                        // not encrypted container -> assume original dataUrl string
+                        dataUrl = content;
+                      }
+                    } catch (e) {
+                      // parse error -> assume not encrypted
+                      dataUrl = content;
+                    }
+                  }
+
+                  finalMessage = dataUrl;
                 }
+
 
                 setMessages(prev => [
                   ...prev,
@@ -317,10 +355,35 @@ const pickPdf = async () => {
     // prepare content: for text, trim; for files keep as-is (base64)
     const contentToSend = isFile ? msgToSend : msgToSend.trim();
 
-    // encrypt only for text (if enabled)
-    const payloadContent = (!isFile && isEncryptionEnabled)
-      ? encryptAES(contentToSend, encryptionKey)
-      : contentToSend;
+    let payloadContent: string;
+
+    if (!isFile && isEncryptionEnabled) {
+      // text
+      payloadContent = encryptAES(contentToSend, encryptionKey);
+    } else if (isFile && isEncryptionEnabled) {
+      // file (data URL like "data:application/pdf;base64,....." hoặc "data:image/jpeg;base64,...")
+      // -> tách mime và base64
+      const match = contentToSend.match(/^data:(.+);base64,(.+)$/);
+      if (!match) {
+        Alert.alert('Lỗi', 'Dữ liệu file không hợp lệ');
+        return;
+      }
+      const mime = match[1];         // e.g. application/pdf
+      const base64 = match[2];       // raw base64 string
+
+      // encrypt base64 and include iv
+      const container = encryptBase64File(base64, encryptionKey);
+      // we will send an object as JSON string in content, so receiver can parse
+      payloadContent = JSON.stringify({
+        encrypted: true,
+        mime,
+        iv: container.iv,
+        data: container.data,
+      });
+    } else {
+      // not encrypted (text or file)
+      payloadContent = contentToSend;
+    }
 
     // construct JSON message
     const msgObj = {
