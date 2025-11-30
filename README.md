@@ -1,6 +1,28 @@
-# 💬 ChatNET
+# 💬 ChatNET_ver2.0 - Midterm Project
 
-Ứng dụng chat peer-to-peer (P2P) qua mạng LAN với tính năng mã hóa Caesar Cipher, được xây dựng bằng React Native.
+**Course: Theory of Cryptography - ET3310**
+
+**Lecturers: Do Trong Tuan, Ma Viet Duc**
+
+**School: Hanoi University of Science and Technology - HUST**
+
+**Group: 4**
+
+**Students: Nguyen Ho Trieu Duong - C41 , Nguyen Tien Dat - C42, Vu Tien Dat - C43**
+
+**Created: Fri 21 Nov 2025 22:15:05 Hanoi, Vietnam**
+
+ChatNET_ver2.0 là ứng dụng chat real-time sử dụng TCP Socket trực tiếp giữa hai thiết bị, hỗ trợ gửi/nhận:
+
+✏️ Văn bản (text)
+
+🖼️ Hình ảnh (image)
+
+📄 Tệp PDF
+
+Toàn bộ dữ liệu có thể được mã hóa AES-256-CBC, giúp đảm bảo tính bí mật khi truyền qua mạng nội bộ.
+
+Ứng dụng hỗ trợ Android và iOS, có thể build thành APK để cài đặt dễ dàng.
 
 ## 🏗️ Kiến trúc & Công nghệ
 
@@ -17,12 +39,54 @@
   - Xcode (iOS)
 
 ### Mã hóa
-Ứng dụng sử dụng **Caesar Cipher** - một phương pháp mã hóa thay thế đơn giản:
-- Mỗi ký tự được dịch chuyển một số vị trí cố định trong bảng chữ cái
+Ứng dụng sử dụng **AES Block Cipher - 256 - CBC** - một phương pháp mã hóa khối đảm bảo tính bảo mật cho việc truyền thông tin trên mạng LAN:
 - Hỗ trợ cả chữ thường, chữ hoa, chữ có dấu tiếng Việt, số và ký tự đặc biệt
-- Key từ 1-25 (dịch chuyển tương ứng)
-- File: `src/utils/caesarCipher.ts`
+- Khóa do người dùng tự nhập (>= 4 ký tự, tự động chuẩn hóa thành 32 bytes).
+- IV được sử dụng:
 
+  - Text: IV cố định để đảm bảo tương thích.
+
+  - File (Ảnh/PDF): IV ngẫu nhiên cho mỗi tin nhắn → tăng tính bảo mật.
+- File: `src/utils/aesCipher.ts`
+Mã hóa Text
+
+- Người dùng nhập tin nhắn.
+
+- Ứng dụng mã hóa chuỗi tin nhắn bằng AES-256-CBC.
+
+- Gửi ciphertext + delimiter <<END>> qua TCP.
+
+- Bên nhận giải mã bằng cùng một khóa.
+
+Mã hóa Ảnh & PDF
+
+- File được đọc thành chuỗi Base64.
+
+- Base64 được mã hóa AES, không gửi plain text.
+
+- Gửi JSON:
+```bash
+{
+  "type": "image/pdf",
+  "content": "{\"encrypted\":true,\"iv\":\"...\",\"data\":\"...\",\"mime\":\"image/jpeg\"}"
+}
+
+```
+
+- Bên nhận:
+
+  - Parse JSON
+
+  - Giải mã AES → lấy lại Base64 gốc
+
+  - Ghép lại thành data:<mime>;base64,<data>
+
+  - Hiển thị hoặc mở file PDF
+ 
+Delimiter cố định: Tất cả gói tin đều kết thúc bằng delimeter để phân tách các JSON trong stream TCP.
+```bash
+<<END>>
+```
 ## 📋 Yêu cầu hệ thống
 
 ### Môi trường phát triển
@@ -55,8 +119,8 @@
 
 ### 1. Clone repository
 ```bash
-git clone https://github.com/xuandungpham/ChatNET.git
-cd ChatNET
+git clone https://github.com/BoonRealQuer1504/ET3310-ChatNetPrj_v2.0
+cd ET3310-ChatNetPrj_v2.0
 ```
 
 ### 2. Cài đặt dependencies
@@ -92,8 +156,17 @@ npm start
 # Hoặc
 npx react-native start
 ```
-
-#### Bước 2: Chạy trên thiết bị/emulator
+#### Bước 2: Cài các thư viện bắt buộc
+```bash
+npm install react-native-tcp-socket
+npm install react-native-document-picker
+npm install react-native-fs
+npm install react-native-file-viewer
+npm install react-native-crypto-js
+npm install react-native-image-picker
+npm install @react-native-community/netinfo
+```
+#### Bước 3: Chạy trên thiết bị/emulator
 Mở terminal mới (giữ Metro chạy) và thực thi:
 ```bash
 # Chạy trên emulator hoặc thiết bị đã kết nối
@@ -175,40 +248,70 @@ adb install -r path/to/app.apk
 ```
 
 ## 📖 Cách sử dụng
+Ứng dụng ChatNET hoạt động theo mô hình TCP trong mạng nội bộ, không cần server trung gian:
+```bash 
+Thiết bị A ↔ Thiết bị B
+```
+### Bước 1: Chuẩn bị
+Hai thiết bị Android (điện thoại hoặc emulator)
 
-### Bước 1: Mở Settings
+Cùng kết nối chung một mạng WiFi / hotspot
+
+Mỗi máy cài ứng dụng ChatNET (APK vừa build)
+### Bước 2: Mở Settings
 1. Mở ứng dụng trên cả 2 thiết bị
 2. Nhấn vào icon ⚙️ (Settings) góc phải trên cùng
 
-### Bước 2: Cấu hình
+### Bước 3: Cấu hình
 **Thiết bị A:**
 - Xem "📱 Địa chỉ IP của bạn" (ví dụ: `192.168.1.100`)
 - Nhập IP của thiết bị B vào "🌐 IP người nhận"
 - Cấu hình mã hóa (nếu cần):
   - Bật/tắt "🔐 Chế độ mã hóa"
-  - Nhập "🔑 Key mã hóa" (1-25, ví dụ: `3`)
+  - Nhập "🔑 Key mã hóa AES" (độ dài tối thiểu 4 ký tự , ví dụ: `2025`)
 
 **Thiết bị B:**
 - Xem IP của mình
 - Nhập IP của thiết bị A vào "IP người nhận"
 - **Quan trọng**: Sử dụng cùng key mã hóa với thiết bị A
 
-### Bước 3: Chat
+### Bước 4: Chat
+#### Tin nhắn Text
 - Nhập tin nhắn vào ô input phía dưới
 - Nhấn nút gửi (icon ✉️)
 - Tin nhắn sẽ được mã hóa (nếu bật) và gửi qua TCP socket
 
-### Ví dụ
-```
-Thiết bị A (IP: 192.168.1.100):
-- Nhập IP người nhận: 192.168.1.101
-- Key: 3
-- Gửi: "Hello" → Mã hóa thành "Khoor" → Thiết bị B nhận
+#### Gửi hình ảnh
+- Nhấn 🔗 để chọn ảnh từ thư viện.
+- Chọn ảnh bất kỳ
+- Gửi ảnh ngay lập tức → thiết bị kia nhận và hiển thị ảnh chính xác
 
-Thiết bị B (IP: 192.168.1.101):
-- Nhập IP người nhận: 192.168.1.100
-- Key: 3 (phải giống thiết bị A)
-- Nhận: "Khoor" → Giải mã thành "Hello"
-```
+#### Gửi hình ảnh
+- Nhấn 🔗 để chọn file từ thư mục trong điện thoại hoặc google drive
+- Chọn file PDF
 
-**⭐ Nếu thấy hữu ích, hãy star repository này!**
+- Người nhận nhấn vào để mở trong FileViewer
+
+## Kiến trúc truyền thông (Networking Overview)
+
+TCP client & server dùng react-native-tcp-socket
+
+Mỗi tin nhắn đóng gói thành JSON
+
+Cuối mỗi gói có <<END>> để cắt đúng packet
+
+Buffer nhận dữ liệu ghép theo từng chunk
+
+## Tính năng dự kiến mở rộng
+
+Gửi video & âm thanh
+
+Mã hóa AES-GCM + HMAC
+
+Nén ảnh trước khi gửi
+
+QR Code để kết nối thiết bị
+
+Giao diện zoom ảnh toàn màn hình
+
+Preview PDF dạng thumbnail
